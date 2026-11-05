@@ -28,6 +28,8 @@ const OPP = { OPP1: 1, OPP2: 2, OPP3: 3 };   // opponent scoring
 const PERIODS = ['Q1', 'Q2', 'Q3', 'Q4', 'OT'];
 const TEAM_FOUL_BONUS = 5;                    // highlight team fouls at this count per quarter
 const COURT_SIZE = 5;                         // players on the floor at once
+const ROLES = { PG: 'Point guard', F: 'Forward', U: 'Utility' };
+const MIN_PG = 1;                             // the rotation planner keeps at least this many point guards on
 
 /* ---------- Storage ---------- */
 function defaultDB() { return { version: 1, teamName: 'JV Girls', roster: [], games: [] }; }
@@ -57,13 +59,85 @@ const pct = (m, a) => a ? Math.round((m / a) * 100) + '%' : '–';
 const byNumber = (a, b) => (parseInt(a.num, 10) || 0) - (parseInt(b.num, 10) || 0) || a.name.localeCompare(b.name);
 const getGame = id => db.games.find(g => g.id === id);
 const playerLabel = p => `#${p.num} ${p.name}`;
+// Roles come from the roster (so a change applies right away), falling back to the game's copy for imported players
+function roleOf(g, id) {
+  const r = db.roster.find(x => x.id === id) || g.players.find(x => x.id === id);
+  return r && ROLES[r.role] ? r.role : '';
+}
+const roleTag = role => role ? `<span class="role role-${role}">${role}</span>` : '';
+const roleSelect = (cur = '') => `<select name="role"><option value="">—</option>${Object.entries(ROLES).map(([k, v]) =>
+  `<option value="${k}" ${cur === k ? 'selected' : ''}>${v}</option>`).join('')}</select>`;
+const gamePlayer = p => ({ id: p.id, num: p.num, name: p.name, role: p.role || '' });
+// A full group with no point guard, on a team that has point guards
+function missingPG(g, ids) {
+  if (ids.length < COURT_SIZE || !g.players.some(p => roleOf(g, p.id) === 'PG')) return false;
+  return ids.filter(id => roleOf(g, id) === 'PG').length < MIN_PG;
+}
 
 // Each game keeps a lineup per period: g.lineups = { Q1: [playerId, …], Q2: … }
 function onCourt(g) {
   const ids = (g.lineups && g.lineups[g.period]) || [];
   return ids.map(id => g.players.find(p => p.id === id)).filter(Boolean);
 }
-function setCourt(g, ids) { g.lineups = g.lineups || {}; g.lineups[g.period] = ids; }
+function setCourt(g, ids) {
+  g.lineups = g.lineups || {}; g.lineups[g.period] = ids;
+  g.played = g.played || {};   // everyone who has been on the court in each period
+  g.played[g.period] = [...new Set([...(g.played[g.period] || []), ...ids])];
+}
+
+// Pre-game rotation plan: g.plan = { Q1: { start: [ids], sub: [ids] }, … }
+const PLAN_QS = ['Q1', 'Q2', 'Q3', 'Q4'];
+const SHIFTS = { start: 'Start of quarter', sub: 'Mid-quarter' };
+const shiftOrder = () => PLAN_QS.flatMap(q => Object.keys(SHIFTS).map(part => [q, part]));
+function planFor(g, q, part) {
+  const ids = (g.plan && g.plan[q] && g.plan[q][part]) || [];
+  return ids.filter(id => g.players.some(p => p.id === id));
+}
+function setPlan(g, q, part, ids) { g.plan = g.plan || {}; g.plan[q] = g.plan[q] || {}; g.plan[q][part] = ids; }
+function planCounts(g) {
+  const c = {}; g.players.forEach(p => { c[p.id] = 0; });
+  shiftOrder().forEach(([q, part]) => planFor(g, q, part).forEach(id => { c[id]++; }));
+  return c;
+}
+function quartersPlayed(g) {
+  const c = {}; g.players.forEach(p => { c[p.id] = 0; });
+  PERIODS.forEach(q => {
+    const ids = new Set([...((g.played && g.played[q]) || []), ...g.events.filter(e => e.q === q && e.p).map(e => e.p)]);
+    ids.forEach(id => { if (id in c) c[id]++; });
+  });
+  return c;
+}
+// Quarters each player has played in every other game, so extra shifts rotate across the season
+function seasonQuarters(g) {
+  const c = {};
+  db.games.filter(x => x.id !== g.id).forEach(x => {
+    const qp = quartersPlayed(x);
+    Object.keys(qp).forEach(id => { c[id] = (c[id] || 0) + qp[id]; });
+  });
+  return c;
+}
+// Fewest planned shifts first, then players who sat out the previous shift, then fewest quarters this season
+function suggestShift(g, q, part, season = seasonQuarters(g)) {
+  const order = shiftOrder();
+  const i = order.findIndex(([a, b]) => a === q && b === part);
+  const prev = new Set(i > 0 ? planFor(g, ...order[i - 1]) : []);
+  const counts = planCounts(g);
+  planFor(g, q, part).forEach(id => { counts[id]--; });
+  const lines = box(g).lines;
+  const ranked = g.players.filter(p => !(lines[p.id] && lines[p.id].PF >= 5))
+    .sort((a, b) => counts[a.id] - counts[b.id] || prev.has(a.id) - prev.has(b.id)
+      || (season[a.id] || 0) - (season[b.id] || 0) || byNumber(a, b));
+  const pick = ranked.slice(0, COURT_SIZE);
+  // Not enough point guards: swap the lowest-ranked non-PG picks for the best-ranked PGs left over
+  const isPG = p => roleOf(g, p.id) === 'PG';
+  const spare = ranked.slice(COURT_SIZE).filter(isPG);
+  while (pick.filter(isPG).length < MIN_PG && spare.length) {
+    const i = pick.map(isPG).lastIndexOf(false);
+    if (i < 0) break;
+    pick[i] = spare.shift();
+  }
+  return pick.map(p => p.id);
+}
 
 let toastTimer;
 function toast(msg) {
@@ -152,7 +226,7 @@ function viewRoster() {
   const items = [...db.roster].sort(byNumber).map(p => `
     <div class="roster-item">
       <div class="jersey num">${esc(p.num)}</div>
-      <div class="grow">${esc(p.name)}</div>
+      <div class="grow">${esc(p.name)} ${roleTag(ROLES[p.role] ? p.role : '')}</div>
       <button class="btn-ghost" data-action="edit-player" data-id="${p.id}">Edit</button>
     </div>`).join('');
   return `
@@ -164,6 +238,7 @@ function viewRoster() {
         <label class="field grow" style="margin:0"><span>Name</span>
           <input name="name" type="text" maxlength="30" required></label>
       </div>
+      <label class="field" style="margin-bottom:0"><span>Role</span>${roleSelect()}</label>
       <button class="btn-primary btn-block" style="margin-top:10px" type="submit">Add Player</button>
     </form>
     <div class="card">${items || '<div class="muted">No players yet.</div>'}</div>
@@ -207,9 +282,10 @@ function viewGame() {
       <div class="right"><div class="team">${esc(g.opponent)}</div><div class="pts num">${b.opp}</div></div>
     </div>
     <div class="subtabs">
-      ${['track', 'box', 'share'].map(s => `<button class="${state.sub === s ? 'on' : ''}" data-action="sub" data-sub="${s}">${{ track: 'Track', box: 'Box Score', share: 'Share' }[s]}</button>`).join('')}
+      ${['track', 'plan', 'box', 'share'].map(s => `<button class="${state.sub === s ? 'on' : ''}" data-action="sub" data-sub="${s}">${{ track: 'Track', plan: 'Plan', box: 'Box Score', share: 'Share' }[s]}</button>`).join('')}
     </div>`;
-  const body = state.sub === 'box' ? viewBox(g, b) : state.sub === 'share' ? viewShare(g, b) : viewTrack(g, b);
+  const body = state.sub === 'box' ? viewBox(g, b) : state.sub === 'share' ? viewShare(g, b)
+    : state.sub === 'plan' ? viewPlan(g) : viewTrack(g, b);
   return header + body;
 }
 
@@ -217,6 +293,8 @@ function viewTrack(g, b) {
   if (g.final) {
     return `<div class="empty">This game is final.<br><br><button data-action="reopen">Reopen to edit stats</button></div>`;
   }
+  // Nobody on the court yet but this quarter has a planned five: put them out there
+  if (!onCourt(g).length && planFor(g, g.period, 'start').length) { setCourt(g, planFor(g, g.period, 'start')); save(); }
   const qFouls = b.byQ[g.period].fouls;
   const periods = `<div class="segmented">${PERIODS.map(q => `<button class="${g.period === q ? 'on' : ''}" data-action="period" data-q="${q}">${q}</button>`).join('')}</div>`;
   const court = onCourt(g).sort(byNumber);
@@ -260,6 +338,42 @@ function viewTrack(g, b) {
     </div>
     ${recent ? `<div class="log"><div class="muted small">Recent (tap ✕ to remove)</div>${recent}</div>` : ''}
   `;
+}
+
+function viewPlan(g) {
+  const players = [...g.players].sort(byNumber);
+  if (!players.length) return '<div class="empty">No players in this game. Use ⋯ → Players dressed.</div>';
+  const counts = planCounts(g), played = quartersPlayed(g);
+  const vals = players.map(p => counts[p.id]);
+  const max = Math.max(...vals);
+  const time = players.map(p => `
+    <div class="pt-item ${max - counts[p.id] >= 2 ? 'low' : ''}">
+      <b class="num" style="width:34px">#${esc(p.num)}</b><span class="grow">${esc(p.name)} ${roleTag(roleOf(g, p.id))}</span>
+      <span class="num c">${counts[p.id]}</span><span class="num c muted">${played[p.id]}</span></div>`).join('');
+  const shift = (q, part) => {
+    const ids = planFor(g, q, part), on = new Set(ids);
+    const five = ids.map(id => g.players.find(p => p.id === id)).sort(byNumber);
+    const bench = players.filter(p => !on.has(p.id));
+    return `<button class="plan-shift" data-action="plan-edit" data-q="${q}" data-part="${part}">
+      <span class="small muted">${SHIFTS[part]}${ids.length < COURT_SIZE ? ` · ${ids.length}/${COURT_SIZE}` : ''}${missingPG(g, ids) ? ' <span class="pg-warn">⚠ No point guard</span>' : ''}</span>
+      <span class="plan-five">${five.map(p => `<span class="pchip">#${esc(p.num)} ${esc(p.name)}${roleTag(roleOf(g, p.id))}</span>`).join('') || '<span class="muted">Tap to pick 5</span>'}</span>
+      ${ids.length ? `<span class="small muted">Bench: ${bench.map(p => esc(p.name)).join(', ') || '—'}</span>` : ''}
+    </button>`;
+  };
+  const cards = PLAN_QS.map(q => `<div class="card"><b>${q}</b>${Object.keys(SHIFTS).map(part => shift(q, part)).join('')}</div>`).join('');
+  return `
+    <div class="row">
+      <button class="grow btn-primary" data-action="plan-auto">✨ Auto-fill fair rotation</button>
+      <button class="btn-ghost" data-action="plan-clear">Clear</button>
+    </div>
+    <p class="muted small">Plan a starting five and a mid-quarter group for each quarter. Planned fives load when a quarter starts, and ⇄ Sub offers the planned change with one tap.
+      ${players.some(p => roleOf(g, p.id) === 'PG') ? 'Auto-fill keeps a point guard in every group.' : 'Tag point guards on the Roster tab and auto-fill will keep one in every group.'}</p>
+    <h2>Playing time</h2>
+    <div class="card pt">
+      <div class="pt-item small muted"><span class="grow">Player</span><span class="c">Planned<br>shifts</span><span class="c">Quarters<br>played</span></div>
+      ${time}
+    </div>
+    ${cards}`;
 }
 
 function describe(g, e) {
@@ -381,12 +495,15 @@ function cleanImportedGame(raw) {
       || (open.filter(r => r.num === num).length === 1 ? open.find(r => r.num === num) : null);
     idMap[p.id] = mine ? mine.id : p.id;
     used.add(idMap[p.id]);
-    return { id: idMap[p.id], num, name };
+    return { id: idMap[p.id], num, name, role: ROLES[p.role] ? p.role : '' };
   });
-  const lineups = {};
-  Object.entries(g.lineups || {}).forEach(([q, ids]) => {
-    if (PERIODS.includes(q) && Array.isArray(ids)) lineups[q] = ids.map(id => idMap[id] || id);
+  const remap = ids => Array.isArray(ids) ? ids.map(id => idMap[id] || id) : [];
+  const lineups = {}, played = {}, plan = {};
+  PERIODS.forEach(q => {
+    if (g.lineups && Array.isArray(g.lineups[q])) lineups[q] = remap(g.lineups[q]);
+    if (g.played && Array.isArray(g.played[q])) played[q] = remap(g.played[q]);
   });
+  PLAN_QS.forEach(q => { if (g.plan && g.plan[q]) plan[q] = { start: remap(g.plan[q].start), sub: remap(g.plan[q].sub) }; });
   return {
     id: typeof g.id === 'string' ? g.id : uid(),
     created: Number(g.created) || Date.now(),
@@ -395,7 +512,7 @@ function cleanImportedGame(raw) {
     home: !!g.home,
     period: PERIODS.includes(g.period) ? g.period : 'Q1',
     final: !!g.final,
-    players, lineups,
+    players, lineups, played, plan,
     events: g.events.filter(e => e && (e.s in STATS || e.s in OPP)).map(e => ({
       id: typeof e.id === 'string' ? e.id : uid(), p: e.p ? (idMap[e.p] || e.p) : null,
       s: e.s, q: PERIODS.includes(e.q) ? e.q : 'Q1', t: Number(e.t) || 0,
@@ -494,7 +611,8 @@ function editPlayerModal(id) {
         <label class="field" style="width:90px"><span>Number</span><input name="num" type="text" inputmode="numeric" maxlength="3" value="${esc(p.num)}" required></label>
         <label class="field grow"><span>Name</span><input name="name" type="text" maxlength="30" value="${esc(p.name)}" required></label>
       </div>
-      <p class="muted small">Changes apply to future games. Past box scores keep the name and number used at the time.</p>
+      <label class="field"><span>Role</span>${roleSelect(p.role)}</label>
+      <p class="muted small">Name and number changes apply to future games; past box scores keep the ones used at the time. Role changes apply to rotation plans right away.</p>
       <div class="row">
         <button type="button" class="btn-danger" data-action="delete-player" data-id="${p.id}">Remove</button>
         <span class="grow"></span>
@@ -550,15 +668,27 @@ function subModal() {
     const L = b.lines[p.id] || emptyLine();
     const fcls = L.PF >= 5 ? 'f5' : L.PF >= 4 ? 'f4' : '';
     return `<button class="sub-chip ${subPick[side] === p.id ? 'sel' : ''} ${fcls}" data-action="sub-pick" data-side="${side}" data-id="${p.id}">
-      <span><b class="num">#${esc(p.num)}</b> ${esc(p.name)}</span>
+      <span><b class="num">#${esc(p.num)}</b> ${esc(p.name)} ${roleTag(roleOf(g, p.id))}</span>
       <span class="muted small num">${L.PTS} pt${L.PTS === 1 ? '' : 's'}${L.PF ? ` · <span class="fouls-txt">${L.PF}F</span>` : ''}</span></button>`;
   };
+  const names = ids => ids.map(id => esc(g.players.find(p => p.id === id).name)).join(', ');
+  const planned = Object.keys(SHIFTS).map(part => {
+    const ids = planFor(g, g.period, part);
+    const goingIn = ids.filter(id => !onIds.has(id)), goingOut = court.map(p => p.id).filter(id => !ids.includes(id));
+    if (ids.length !== COURT_SIZE || !goingIn.length) return '';
+    return `<button class="btn-block plan-go" data-action="sub-plan" data-part="${part}">
+      ▶ Planned ${esc(g.period)} ${part === 'start' ? 'start' : 'sub'}<br>
+      <span class="small">In: ${names(goingIn)}${goingOut.length ? ` · Out: ${names(goingOut)}` : ''}</span>
+      ${missingPG(g, ids) ? '<br><span class="small pg-warn">⚠ Leaves no point guard on the court</span>' : ''}</button>`;
+  }).join('');
   const full = court.length >= COURT_SIZE;
   const hint = !full && !subPick.out ? `Tap bench players to put them on the court (${court.length}/${COURT_SIZE}).`
     : 'Tap who’s coming out, then who’s going in.';
   const html = `
     <h2 style="margin-top:0">Substitution · ${esc(g.period)}</h2>
     <p class="muted small" style="margin-top:-4px">${hint}</p>
+    ${missingPG(g, [...onIds]) ? '<p class="pg-warn small" style="margin-top:-4px">⚠ No point guard on the court</p>' : ''}
+    ${planned}
     <div class="sub-cols">
       <div><div class="sub-h">On court <span class="muted num">${court.length}/${COURT_SIZE}</span></div>
         ${court.map(p => chip(p, 'out')).join('') || '<div class="muted small">Nobody yet</div>'}</div>
@@ -567,6 +697,31 @@ function subModal() {
     </div>
     <div class="sub-last small">${subPick.last}</div>
     <button class="btn-primary btn-block" data-action="close-modal">Done</button>`;
+  if ($modal.open) $modal.innerHTML = html; else openModal(html);
+}
+
+// Which planned shift is being edited: { q, part, msg }
+let planEdit = null;
+function planModal() {
+  const g = getGame(state.gameId); if (!g || !planEdit) return;
+  const { q, part } = planEdit;
+  const on = new Set(planFor(g, q, part));
+  const counts = planCounts(g), lines = box(g).lines;
+  const list = [...g.players].sort(byNumber).map(p => {
+    const pf = (lines[p.id] || emptyLine()).PF;
+    return `<button class="sub-chip ${on.has(p.id) ? 'sel' : ''} ${pf >= 5 ? 'f5' : ''}" data-action="plan-toggle" data-id="${p.id}">
+      <span><b class="num">#${esc(p.num)}</b> ${esc(p.name)} ${roleTag(roleOf(g, p.id))}</span>
+      <span class="muted small">${counts[p.id]} shift${counts[p.id] === 1 ? '' : 's'} planned</span></button>`;
+  }).join('');
+  const html = `
+    <h2 style="margin-top:0">${q} · ${SHIFTS[part]}</h2>
+    <p class="muted small" style="margin-top:-4px">${planEdit.msg || `Tap players to pick ${COURT_SIZE} (${on.size}/${COURT_SIZE}).`}</p>
+    ${missingPG(g, [...on]) ? '<p class="pg-warn small" style="margin-top:-4px">⚠ No point guard in this group</p>' : ''}
+    <div class="plan-pick">${list}</div>
+    <div class="row" style="margin-top:12px">
+      <button class="grow" data-action="plan-suggest">✨ Suggest</button>
+      <button class="grow btn-primary" data-action="close-modal">Done</button>
+    </div>`;
   if ($modal.open) $modal.innerHTML = html; else openModal(html);
 }
 
@@ -614,7 +769,10 @@ const actions = {
     const g = getGame(state.gameId);
     const prev = onCourt(g).map(p => p.id);
     g.period = el.dataset.q;
-    if (!(g.lineups && g.lineups[g.period])) setCourt(g, prev);   // new quarter starts with the current five
+    if (!(g.lineups && g.lineups[g.period])) {   // new quarter starts with its planned five, else the current five
+      const planned = planFor(g, g.period, 'start');
+      setCourt(g, planned.length ? planned : prev);
+    }
     if (!onCourt(g).some(p => p.id === state.selected)) state.selected = null;
     save(); render();
   },
@@ -643,6 +801,42 @@ const actions = {
       save(); buzz(); render();
     }
     subModal();
+  },
+  'sub-plan': el => {
+    const g = getGame(state.gameId);
+    setCourt(g, planFor(g, g.period, el.dataset.part));
+    if (!onCourt(g).some(p => p.id === state.selected)) state.selected = null;
+    subPick = { out: null, in: null, last: `✓ Planned ${el.dataset.part === 'start' ? 'start' : 'sub'} is on the court` };
+    save(); buzz(); render(); subModal();
+  },
+  'plan-edit': el => { planEdit = { q: el.dataset.q, part: el.dataset.part }; planModal(); },
+  'plan-toggle': el => {
+    const g = getGame(state.gameId);
+    const ids = planFor(g, planEdit.q, planEdit.part), id = el.dataset.id;
+    planEdit.msg = '';
+    if (ids.includes(id)) setPlan(g, planEdit.q, planEdit.part, ids.filter(x => x !== id));
+    else if (ids.length >= COURT_SIZE) planEdit.msg = `Already ${COURT_SIZE} picked — tap someone to take them off first.`;
+    else setPlan(g, planEdit.q, planEdit.part, [...ids, id]);
+    save(); render(); planModal();
+  },
+  'plan-suggest': () => {
+    const g = getGame(state.gameId);
+    setPlan(g, planEdit.q, planEdit.part, suggestShift(g, planEdit.q, planEdit.part));
+    planEdit.msg = 'Suggested the players with the fewest planned shifts.';
+    save(); render(); planModal();
+  },
+  'plan-auto': () => {
+    const g = getGame(state.gameId);
+    const hasPlan = shiftOrder().some(([q, part]) => planFor(g, q, part).length);
+    if (hasPlan && !confirm('Replace your current plan with an evenly balanced rotation?')) return;
+    g.plan = {};
+    const season = seasonQuarters(g);
+    shiftOrder().forEach(([q, part]) => setPlan(g, q, part, suggestShift(g, q, part, season)));
+    save(); render(); toast('Rotation filled — tap any line to adjust');
+  },
+  'plan-clear': () => {
+    if (!confirm('Clear the whole plan?')) return;
+    getGame(state.gameId).plan = {}; save(); render();
   },
   select: el => { state.selected = state.selected === el.dataset.id ? null : el.dataset.id; render(); },
   stat: el => {
@@ -701,17 +895,18 @@ const forms = {
     const num = fd.get('num').trim(), name = fd.get('name').trim();
     if (!num || !name) return;
     if (db.roster.some(p => p.num === num) && !confirm(`#${num} is already on the roster. Add anyway?`)) return;
-    db.roster.push({ id: uid(), num, name }); save(); render();
+    db.roster.push({ id: uid(), num, name, role: fd.get('role') || '' }); save(); render();
     const input = $app.querySelector('[data-form="add-player"] input[name="num"]'); if (input) input.focus();
     toast(`Added #${num} ${name}`);
   },
   'edit-player': (f, fd) => {
     const p = db.roster.find(x => x.id === f.dataset.id); if (!p) return;
-    p.num = fd.get('num').trim(); p.name = fd.get('name').trim(); save(); closeModal(); render();
+    p.num = fd.get('num').trim(); p.name = fd.get('name').trim(); p.role = fd.get('role') || '';
+    save(); closeModal(); render();
   },
   'new-game': (f, fd) => {
     const ids = new Set(fd.getAll('p'));
-    const players = db.roster.filter(p => ids.has(p.id)).map(p => ({ id: p.id, num: p.num, name: p.name }));
+    const players = db.roster.filter(p => ids.has(p.id)).map(gamePlayer);
     if (!players.length) { toast('Pick at least one player'); return; }
     const g = { id: uid(), created: Date.now(), opponent: fd.get('opponent').trim(), date: fd.get('date'),
       home: fd.get('home') === '1', period: 'Q1', final: false, players, lineups: {}, events: [] };
@@ -724,7 +919,7 @@ const forms = {
     const keep = new Set([...fd.getAll('p'), ...g.events.map(e => e.p).filter(Boolean)]);
     const existing = g.players.filter(p => keep.has(p.id));
     const have = new Set(existing.map(p => p.id));
-    const added = db.roster.filter(p => keep.has(p.id) && !have.has(p.id)).map(p => ({ id: p.id, num: p.num, name: p.name }));
+    const added = db.roster.filter(p => keep.has(p.id) && !have.has(p.id)).map(gamePlayer);
     g.players = [...existing, ...added]; save(); closeModal(); render();
   },
   'game-details': (f, fd) => {

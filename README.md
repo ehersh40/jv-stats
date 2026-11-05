@@ -64,9 +64,18 @@ Open it once with internet access. After that it works offline.
 
 ## Using the app
 
-1. **Roster tab:** add each player's number and name.
+1. **Roster tab:** add each player's number, name and role: **PG** (point guard), **F** (forward) or **U** (utility).
+   Tap **Edit** to change a role later.
 2. **Games → + New Game:** enter the opponent, date and home/away, and uncheck anyone not dressed.
-3. **Track:**
+3. **Plan (optional, before the game):** open the game's **Plan** tab to set a starting five and a
+   mid-quarter group for each quarter. The bench for each group is listed under it.
+   - **✨ Auto-fill fair rotation** spreads shifts as evenly as possible, rests players who just came off,
+     keeps at least one point guard in every group, and gives any extra shifts to whoever has played the fewest
+     quarters this season. Tap any group to adjust it.
+   - A group with no point guard shows **⚠ No point guard**. It's a warning only; you can still use that lineup.
+   - **Playing time** shows each player's planned shifts next to the quarters she actually played.
+   - While tracking, each quarter starts with its planned five, and **⇄ Sub** offers the planned change as one button.
+4. **Track:**
    - When the game starts, pick your starting five. Only the 5 players on the court are shown.
    - Tap **⇄ Sub**, then tap who's coming out and who's going in. Each quarter remembers its own lineup,
      and a new quarter starts with whoever finished the last one.
@@ -76,16 +85,16 @@ Open it once with internet access. After that it works offline.
    - **Undo last** or the **✕** in the Recent list fixes mistakes.
    - Players show a yellow bar at 4 fouls and are dimmed at 5. Team fouls per quarter are shown, highlighted at 5.
    - The screen stays awake while tracking, on phones that support it.
-4. **End game**, then **Share:**
+5. **End game**, then **Share:**
    - **Share CSV file** opens the phone's share sheet (Messages, email, Drive…).
    - **Share/Copy text summary** gives a readable recap that's good for a group text to parents.
    - **Download CSV** saves the file to the phone.
    - **Share game file** sends the full game to another coach (see below).
-5. **Importing an assistant's game:** the assistant opens the game and goes to **Share → Share game file**,
+6. **Importing an assistant's game:** the assistant opens the game and goes to **Share → Share game file**,
    then texts or emails it to you. Save the attachment to your phone (iPhone: **Save to Files**; Android: **Download**),
    then go to **Games → Import game file…** and pick it. Players are matched to your roster by number and name.
    Importing the same game again asks whether to replace your copy.
-6. **Settings:** change the team name, **Back up** all data to a file, and **Restore** it on a new phone.
+7. **Settings:** change the team name, **Back up** all data to a file, and **Restore** it on a new phone.
 
 ### About texting the CSV
 iMessage, RCS (Android-to-Android), email and Google Drive handle CSV attachments well.

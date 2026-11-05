@@ -13,6 +13,7 @@
   --bad: #ef5a5f;
   --bad-bg: #3d1d20;
   --warn: #f5b83d;
+  --info: #5aa9f2;
   --radius: 14px;
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
@@ -33,6 +34,7 @@
     --bad: #cc2f35;
     --bad-bg: #fbe1e2;
     --warn: #b77a00;
+    --info: #1f6fbf;
     color-scheme: light;
   }
 }
@@ -154,6 +156,30 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1p
 .sub-chip.f4 .fouls-txt { color: var(--warn); font-weight: 700; }
 .sub-chip.f5 { opacity: 0.5; }
 .sub-chip.f5 .fouls-txt { color: var(--bad); font-weight: 700; }
+.plan-go { margin-bottom: 12px; text-align: left; border: 2px solid var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--surface)); font-weight: 700; }
+.plan-go .small { font-weight: 400; }
+
+/* ===== Plan tab ===== */
+.plan-shift {
+  display: flex; flex-direction: column; align-items: stretch; gap: 6px; width: 100%;
+  text-align: left; margin-top: 8px; padding: 10px 12px;
+}
+.plan-five { display: flex; flex-wrap: wrap; gap: 4px; }
+.pchip { font-size: 13px; padding: 3px 8px; border-radius: 99px; background: var(--surface); border: 1px solid var(--line); white-space: nowrap; }
+.pt-item { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.pt-item:last-child { border-bottom: 0; }
+.pt-item .c { width: 64px; text-align: center; line-height: 1.2; }
+.pt-item.low .grow, .pt-item.low .c:not(.muted) { color: var(--warn); font-weight: 700; }
+.role {
+  display: inline-block; font-size: 10px; font-weight: 800; line-height: 1.5; padding: 0 5px; margin-left: 4px;
+  border-radius: 6px; vertical-align: 1px; --c: var(--muted);
+  color: var(--c); background: color-mix(in srgb, var(--c) 18%, transparent);
+}
+.role-PG { --c: var(--accent); }
+.role-F { --c: var(--info); }
+.role-U { --c: var(--good); }
+.pg-warn { color: var(--warn); font-weight: 700; }
+.plan-pick { display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px; max-height: 55vh; overflow: auto; }
 .sub-last { min-height: 20px; margin: 4px 0 10px; color: var(--good); }
 
 /* ===== Stat pad ===== */

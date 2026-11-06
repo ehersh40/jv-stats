@@ -1,6 +1,6 @@
 // Service worker: makes the app work offline.
 // ➜ When you publish changes, bump CACHE_VERSION (v1 → v2 …) so phones pick up the update.
-const CACHE_VERSION = 'v5';
+const CACHE_VERSION = 'v6';
 const CACHE = `jvstats-${CACHE_VERSION}`;
 const ASSETS = [
   './',

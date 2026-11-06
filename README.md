@@ -79,12 +79,16 @@ Open it once with internet access. After that it works offline.
    - When the game starts, pick your starting five. Only the 5 players on the court are shown.
    - Tap **⇄ Sub**, then tap who's coming out and who's going in. Each quarter remembers its own lineup,
      and a new quarter starts with whoever finished the last one.
+   - Each tile shows its position: **PG, F, F, C, IG** (inbounds guard). Positions are filled from roster roles,
+     and a sub takes the position of the player she replaces. To change one, tap the small position label on a tile,
+     then tap the position she should move to; she swaps with whoever is there.
    - Tap a player, then tap a stat. Green buttons are makes, red are misses.
    - Use **Lakeview +1/+2/+3** (your opponent's name) to keep their score.
    - Switch quarters with **Q1–Q4 / OT**.
    - **Undo last** or the **✕** in the Recent list fixes mistakes.
    - Players show a yellow bar at 4 fouls and are dimmed at 5. Team fouls per quarter are shown, highlighted at 5.
    - The screen stays awake while tracking, on phones that support it.
+   - The **Box Score** tab lists the positions each player played in each quarter (also in the CSV).
 5. **End game**, then **Share:**
    - **Share CSV file** opens the phone's share sheet (Messages, email, Drive…).
    - **Share/Copy text summary** gives a readable recap that's good for a group text to parents.

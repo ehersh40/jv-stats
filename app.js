@@ -30,6 +30,9 @@ const TEAM_FOUL_BONUS = 5;                    // highlight team fouls at this co
 const COURT_SIZE = 5;                         // players on the floor at once
 const ROLES = { PG: 'Point guard', F: 'Forward', U: 'Utility' };
 const MIN_PG = 1;                             // the rotation planner keeps at least this many point guards on
+// Court positions by lineup slot, and which roster roles suit each one (best first)
+const POSITIONS = ['PG', 'F', 'F', 'C', 'IG'];
+const SLOT_PREFS = { PG: ['PG', 'U', 'F'], F: ['F', 'U', 'PG'], C: ['U', 'F', 'PG'], IG: ['U', 'PG', 'F'] };
 
 /* ---------- Storage ---------- */
 function defaultDB() { return { version: 1, teamName: 'JV Girls', roster: [], games: [] }; }
@@ -46,7 +49,7 @@ function save() {
 }
 let db = load();
 
-const state = { view: 'games', gameId: null, sub: 'track', selected: null };
+const state = { view: 'games', gameId: null, sub: 'track', selected: null, posPick: null };
 
 /* ---------- Helpers ---------- */
 const $app = document.getElementById('app');
@@ -75,6 +78,7 @@ function missingPG(g, ids) {
 }
 
 // Each game keeps a lineup per period: g.lineups = { Q1: [playerId, …], Q2: … }
+// A player's index in the lineup is her slot, so lineup[0] plays POSITIONS[0] (PG), and so on.
 function onCourt(g) {
   const ids = (g.lineups && g.lineups[g.period]) || [];
   return ids.map(id => g.players.find(p => p.id === id)).filter(Boolean);
@@ -83,6 +87,24 @@ function setCourt(g, ids) {
   g.lineups = g.lineups || {}; g.lineups[g.period] = ids;
   g.played = g.played || {};   // everyone who has been on the court in each period
   g.played[g.period] = [...new Set([...(g.played[g.period] || []), ...ids])];
+  if (ids.length < COURT_SIZE) return;
+  g.pos = g.pos || {};         // positions each player has played in each period: g.pos.Q1[id] = ['PG', …]
+  const qp = g.pos[g.period] = g.pos[g.period] || {};
+  ids.forEach((id, i) => { qp[id] = qp[id] || []; if (!qp[id].includes(POSITIONS[i])) qp[id].push(POSITIONS[i]); });
+}
+// Orders players into slots: anyone in `keep` stays in her old slot, the rest fill open slots by role
+function placeLineup(g, ids, keep = []) {
+  const n = Math.min(ids.length, COURT_SIZE), slots = new Array(n).fill(null);
+  const left = new Set(ids.slice(0, COURT_SIZE));
+  keep.forEach((id, i) => { if (i < n && left.has(id)) { slots[i] = id; left.delete(id); } });
+  for (let i = 0; i < n; i++) {
+    if (slots[i]) continue;
+    const prefs = SLOT_PREFS[POSITIONS[i]];
+    const rank = id => { const r = prefs.indexOf(roleOf(g, id)); return r < 0 ? prefs.length : r; };
+    slots[i] = [...left].sort((a, b) => rank(a) - rank(b))[0];
+    left.delete(slots[i]);
+  }
+  return slots;
 }
 
 // Pre-game rotation plan: g.plan = { Q1: { start: [ids], sub: [ids] }, … }
@@ -294,15 +316,16 @@ function viewTrack(g, b) {
     return `<div class="empty">This game is final.<br><br><button data-action="reopen">Reopen to edit stats</button></div>`;
   }
   // Nobody on the court yet but this quarter has a planned five: put them out there
-  if (!onCourt(g).length && planFor(g, g.period, 'start').length) { setCourt(g, planFor(g, g.period, 'start')); save(); }
+  if (!onCourt(g).length && planFor(g, g.period, 'start').length) { setCourt(g, placeLineup(g, planFor(g, g.period, 'start'))); save(); }
   const qFouls = b.byQ[g.period].fouls;
   const periods = `<div class="segmented">${PERIODS.map(q => `<button class="${g.period === q ? 'on' : ''}" data-action="period" data-q="${q}">${q}</button>`).join('')}</div>`;
-  const court = onCourt(g).sort(byNumber);
-  const tiles = court.map(p => {
+  const court = onCourt(g);
+  const tiles = court.map((p, i) => {
     const L = b.lines[p.id] || emptyLine();
     const fcls = L.PF >= 5 ? 'f5' : L.PF >= 4 ? 'f4' : '';
+    const pos = court.length === COURT_SIZE ? `<span class="pos ${state.posPick === p.id ? 'on' : ''}" data-action="pos" data-id="${p.id}">${POSITIONS[i]}</span>` : '';
     return `<button class="tile ${state.selected === p.id ? 'sel' : ''} ${fcls}" data-action="select" data-id="${p.id}">
-      <span class="fouls">${L.PF ? L.PF + 'F' : ''}</span>
+      ${pos}<span class="fouls">${L.PF ? L.PF + 'F' : ''}</span>
       <span class="n num">${esc(p.num)}</span>
       <span class="nm">${esc(p.name)}</span>
       <span class="pp num">${L.PTS} pt${L.PTS === 1 ? '' : 's'}</span>
@@ -311,6 +334,11 @@ function viewTrack(g, b) {
   const subTile = `<button class="tile sub-tile" data-action="sub-modal">
       <span class="n">⇄</span><span class="nm">${court.length < COURT_SIZE ? `Set lineup (${court.length}/${COURT_SIZE})` : 'Sub'}</span></button>`;
   const sel = court.find(p => p.id === state.selected);
+  const moving = court.length === COURT_SIZE && court.find(p => p.id === state.posPick);
+  const posRow = moving ? `
+    <div class="pos-row"><span class="small">Move <b>${esc(moving.name)}</b> to</span>
+      ${court.map((p, i) => `<button class="${p.id === moving.id ? 'on' : ''}" data-action="pos-to" data-i="${i}">${POSITIONS[i]}</button>`).join('')}
+      <button class="btn-ghost" data-action="pos-cancel" aria-label="Cancel">✕</button></div>` : '';
   const pad = Object.entries(STATS).map(([k, v]) =>
     `<button class="${v.cls || ''}" data-action="stat" data-s="${k}" ${sel ? '' : 'disabled'}>${v.btn}</button>`).join('');
   const recent = g.events.slice(-8).reverse().map(e => `
@@ -324,6 +352,7 @@ function viewTrack(g, b) {
     </div>
     ${g.players.length ? '' : '<div class="empty" style="margin-bottom:8px">No players in this game. Use ⋯ → Players dressed.</div>'}
     <div class="players">${tiles}${g.players.length ? subTile : ''}</div>
+    ${posRow}
     <div class="pad-head">${sel ? `Recording for <span style="color:var(--accent)">${esc(playerLabel(sel))}</span>` : '<span class="muted">Tap a player, then a stat</span>'}</div>
     <div class="pad">${pad}</div>
     <div class="opp-row">
@@ -405,8 +434,21 @@ function viewBox(g, b) {
       <tr><td class="name">${esc(db.teamName)}</td>${qs.map(q => `<td>${b.byQ[q].us}</td>`).join('')}<td><b>${b.team.PTS}</b></td></tr>
       <tr><td class="name">${esc(g.opponent)}</td>${qs.map(q => `<td>${b.byQ[q].them}</td>`).join('')}<td><b>${b.opp}</b></td></tr>
     </table></div>
+    ${positionsTable(g, qs)}
     <p class="muted small">FG includes 2s and 3s. Swipe the table sideways to see every column.</p>
   `;
+}
+function positionsTable(g, qs) {
+  const pos = g.pos || {};
+  if (!qs.some(q => pos[q] && Object.keys(pos[q]).length)) return '';
+  const rows = [...g.players].sort(byNumber).map(p => `<tr><td class="name">${esc(playerLabel(p))}</td>${qs.map(q =>
+    `<td>${((pos[q] && pos[q][p.id]) || []).join('/') || '<span class="muted">–</span>'}</td>`).join('')}</tr>`).join('');
+  return `
+    <h2>Positions</h2>
+    <div class="table-wrap"><table>
+      <tr><th class="name">Player</th>${qs.map(q => `<th>${q}</th>`).join('')}</tr>
+      ${rows}
+    </table></div>`;
 }
 
 function viewShare(g, b) {
@@ -471,6 +513,11 @@ function gameCSV(g) {
   rows.push(['Quarter', ...qs, 'Total']);
   rows.push([db.teamName, ...qs.map(q => b.byQ[q].us), b.team.PTS]);
   rows.push([g.opponent, ...qs.map(q => b.byQ[q].them), b.opp]);
+  const pos = g.pos || {};
+  if (qs.some(q => pos[q] && Object.keys(pos[q]).length)) {
+    rows.push([], ['Positions', ...qs]);
+    [...g.players].sort(byNumber).forEach(p => rows.push([playerLabel(p), ...qs.map(q => ((pos[q] && pos[q][p.id]) || []).join('/'))]));
+  }
   return rows.map(r => r.map(csvCell).join(',')).join('\r\n');
 }
 function csvFileName(g, ext = 'csv') {
@@ -498,10 +545,14 @@ function cleanImportedGame(raw) {
     return { id: idMap[p.id], num, name, role: ROLES[p.role] ? p.role : '' };
   });
   const remap = ids => Array.isArray(ids) ? ids.map(id => idMap[id] || id) : [];
-  const lineups = {}, played = {}, plan = {};
+  const lineups = {}, played = {}, plan = {}, pos = {};
   PERIODS.forEach(q => {
     if (g.lineups && Array.isArray(g.lineups[q])) lineups[q] = remap(g.lineups[q]);
     if (g.played && Array.isArray(g.played[q])) played[q] = remap(g.played[q]);
+    if (g.pos && g.pos[q] && typeof g.pos[q] === 'object') {
+      pos[q] = Object.fromEntries(Object.entries(g.pos[q]).map(([id, list]) =>
+        [idMap[id] || id, Array.isArray(list) ? list.filter(x => POSITIONS.includes(x)) : []]));
+    }
   });
   PLAN_QS.forEach(q => { if (g.plan && g.plan[q]) plan[q] = { start: remap(g.plan[q].start), sub: remap(g.plan[q].sub) }; });
   return {
@@ -512,7 +563,7 @@ function cleanImportedGame(raw) {
     home: !!g.home,
     period: PERIODS.includes(g.period) ? g.period : 'Q1',
     final: !!g.final,
-    players, lineups, played, plan,
+    players, lineups, played, plan, pos,
     events: g.events.filter(e => e && (e.s in STATS || e.s in OPP)).map(e => ({
       id: typeof e.id === 'string' ? e.id : uid(), p: e.p ? (idMap[e.p] || e.p) : null,
       s: e.s, q: PERIODS.includes(e.q) ? e.q : 'Q1', t: Number(e.t) || 0,
@@ -661,14 +712,15 @@ let subPick = { out: null, in: null, last: '' };
 function subModal() {
   const g = getGame(state.gameId); if (!g) return;
   const b = box(g);
-  const court = onCourt(g).sort(byNumber);
+  const court = onCourt(g);
   const onIds = new Set(court.map(p => p.id));
   const bench = g.players.filter(p => !onIds.has(p.id)).sort(byNumber);
-  const chip = (p, side) => {
+  const chip = (p, side, slot) => {
     const L = b.lines[p.id] || emptyLine();
     const fcls = L.PF >= 5 ? 'f5' : L.PF >= 4 ? 'f4' : '';
+    const pos = slot != null && court.length === COURT_SIZE ? `<span class="pos-txt">${POSITIONS[slot]}</span> ` : '';
     return `<button class="sub-chip ${subPick[side] === p.id ? 'sel' : ''} ${fcls}" data-action="sub-pick" data-side="${side}" data-id="${p.id}">
-      <span><b class="num">#${esc(p.num)}</b> ${esc(p.name)} ${roleTag(roleOf(g, p.id))}</span>
+      <span>${pos}<b class="num">#${esc(p.num)}</b> ${esc(p.name)} ${roleTag(roleOf(g, p.id))}</span>
       <span class="muted small num">${L.PTS} pt${L.PTS === 1 ? '' : 's'}${L.PF ? ` · <span class="fouls-txt">${L.PF}F</span>` : ''}</span></button>`;
   };
   const names = ids => ids.map(id => esc(g.players.find(p => p.id === id).name)).join(', ');
@@ -691,7 +743,7 @@ function subModal() {
     ${planned}
     <div class="sub-cols">
       <div><div class="sub-h">On court <span class="muted num">${court.length}/${COURT_SIZE}</span></div>
-        ${court.map(p => chip(p, 'out')).join('') || '<div class="muted small">Nobody yet</div>'}</div>
+        ${court.map((p, i) => chip(p, 'out', i)).join('') || '<div class="muted small">Nobody yet</div>'}</div>
       <div><div class="sub-h">Bench</div>
         ${bench.map(p => chip(p, 'in')).join('') || '<div class="muted small">Nobody on the bench</div>'}</div>
     </div>
@@ -771,7 +823,7 @@ const actions = {
     g.period = el.dataset.q;
     if (!(g.lineups && g.lineups[g.period])) {   // new quarter starts with its planned five, else the current five
       const planned = planFor(g, g.period, 'start');
-      setCourt(g, planned.length ? planned : prev);
+      setCourt(g, planned.length ? placeLineup(g, planned, prev) : prev);
     }
     if (!onCourt(g).some(p => p.id === state.selected)) state.selected = null;
     save(); render();
@@ -795,7 +847,7 @@ const actions = {
       subPick.out = subPick.in = null;
       save(); buzz(); render();
     } else if (subPick.in && court.length < COURT_SIZE) {
-      setCourt(g, [...court, subPick.in]);
+      setCourt(g, placeLineup(g, [...court, subPick.in]));   // still forming the five: arrange by role
       subPick.last = `+ <b>${name(subPick.in)}</b> on the court`;
       subPick.in = null;
       save(); buzz(); render();
@@ -804,7 +856,7 @@ const actions = {
   },
   'sub-plan': el => {
     const g = getGame(state.gameId);
-    setCourt(g, planFor(g, g.period, el.dataset.part));
+    setCourt(g, placeLineup(g, planFor(g, g.period, el.dataset.part), onCourt(g).map(p => p.id)));
     if (!onCourt(g).some(p => p.id === state.selected)) state.selected = null;
     subPick = { out: null, in: null, last: `✓ Planned ${el.dataset.part === 'start' ? 'start' : 'sub'} is on the court` };
     save(); buzz(); render(); subModal();
@@ -838,7 +890,24 @@ const actions = {
     if (!confirm('Clear the whole plan?')) return;
     getGame(state.gameId).plan = {}; save(); render();
   },
-  select: el => { state.selected = state.selected === el.dataset.id ? null : el.dataset.id; render(); },
+  select: el => { state.selected = state.selected === el.dataset.id ? null : el.dataset.id; state.posPick = null; render(); },
+  pos: el => { state.posPick = state.posPick === el.dataset.id ? null : el.dataset.id; render(); },
+  'pos-cancel': () => { state.posPick = null; render(); },
+  'pos-to': el => {
+    const g = getGame(state.gameId);
+    const ids = onCourt(g).map(p => p.id);
+    const from = ids.indexOf(state.posPick), to = Number(el.dataset.i);
+    state.posPick = null;
+    if (from < 0 || from === to) { render(); return; }
+    // A position fix is a correction, so the two players drop the positions they're leaving this quarter
+    const qp = (g.pos && g.pos[g.period]) || {};
+    [[ids[from], POSITIONS[from]], [ids[to], POSITIONS[to]]].forEach(([id, old]) => {
+      if (qp[id]) qp[id] = qp[id].filter(x => x !== old);
+    });
+    [ids[from], ids[to]] = [ids[to], ids[from]];
+    setCourt(g, ids); save(); render();
+    toast(`${g.players.find(p => p.id === ids[to]).name} → ${POSITIONS[to]}`);
+  },
   stat: el => {
     const g = getGame(state.gameId);
     const p = g.players.find(x => x.id === state.selected);

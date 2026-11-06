@@ -140,6 +140,17 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1p
 .fouls { position: absolute; top: 5px; right: 6px; font-size: 11px; font-weight: 700; color: var(--muted); }
 .f4 .fouls { color: var(--warn); }
 .f5 .fouls { color: var(--bad); }
+.tile .pos {
+  position: absolute; top: 4px; left: 4px; font-size: 11px; font-weight: 800; line-height: 1;
+  padding: 5px 7px; border-radius: 7px; background: var(--surface-2); color: var(--accent);
+}
+.tile .pos.on { background: var(--accent); color: var(--accent-ink); }
+.pos-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.pos-row > span { width: 100%; }
+.pos-row button { flex: 1; min-height: 42px; padding: 6px 4px; font-weight: 800; }
+.pos-row button.on { background: var(--accent); color: var(--accent-ink); }
+.pos-row .btn-ghost { flex: 0 0 46px; }
+.pos-txt { font-size: 11px; font-weight: 800; color: var(--accent); }
 .sub-tile { border-style: dashed; color: var(--accent); }
 .sub-tile .n { font-size: 24px; }
 .sub-tile .nm { font-weight: 700; white-space: normal; text-align: center; }
